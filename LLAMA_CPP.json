@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/thecodacus/llama.cpp",
+  "branch": "perf",
+  "commit": "27c54b4bbcefadedcec6397477cc2e866c1db716",
+  "reference": "https://www.youtube.com/watch?v=IH8XmxiwliQ",
+  "recipe": "Qwen3.8-Flash-Next 177B UD-IQ3_XXS; code+chat routing traces; 56 hot-expert slots; draft-mtp; one CPU worker per available physical core (auto, quota-aware)",
+  "video_reference_threads": 6,
+  "note": "Codacus perf, not FreeToken or GenerelSchwerz. Throughput in the upstream README is not a benchmark of this container."
+}
