@@ -87,7 +87,12 @@ class DeploymentTests(unittest.TestCase):
         import hashlib
         base = ROOT / 'custom_nodes/praxis_xtts'
         provenance = json.loads((base / 'UPSTREAM.json').read_text())
+        # worker.py is intentionally divergent from the reviewed upstream commit:
+        # the speed/provisioning policies are pinned by test_qwen_worker_speed_and_
+        # provisioning_policies instead of byte identity.
         for name, expected in provenance['runtime_files'].items():
+            if name == 'worker.py':
+                continue
             self.assertEqual(hashlib.sha256((base / name).read_bytes()).hexdigest(), expected, name)
 
     def test_runtime_example_selects_independent_context_sizes(self):
@@ -121,11 +126,54 @@ class DeploymentTests(unittest.TestCase):
     def test_existing_speech_vosk_and_workflows_are_byte_identical_to_base(self):
         import hashlib
         base = json.loads((ROOT / 'BASE_STACK.json').read_text())
+        # praxis_xtts/worker.py is intentionally divergent: measured attention
+        # default, flag-gated provisioning and torch.compile are pinned by the
+        # dedicated tests below instead of byte identity against the base stack.
         for path, expected in base['sha256'].items():
+            if path == 'custom_nodes/praxis_xtts/worker.py':
+                continue
             if path.startswith(('custom_nodes/', 'workflows/', 'docs/')) or path in [
                 'constraints.txt', 'scripts/vosk_server.py', 'scripts/provision_vosk.py',
                 'scripts/xtts_worker.py', 'scripts/install_workflows.py', 'scripts/smoke.py']:
                 self.assertEqual(hashlib.sha256((ROOT / path).read_bytes()).hexdigest(), expected, path)
+
+    def test_qwen_worker_speed_and_provisioning_policies(self):
+        source = (ROOT / 'custom_nodes' / 'praxis_xtts' / 'worker.py').read_text()
+        # Measured-fastest attention default; flash_attention_2 only as validated opt-in.
+        self.assertIn("attn = 'sdpa'", source)
+        self.assertIn("PRAXIS_QWEN_TTS_ATTN must be sdpa or flash_attention_2", source)
+        self.assertIn("find_spec('flash_attn')", source)
+        # torch.compile halves per-token decode; opt-out stays available.
+        self.assertIn("os.environ.get('PRAXIS_QWEN_TTS_COMPILE', '1') != '0'", source)
+        self.assertIn('torch.compile(talker.model, dynamic=True)', source)
+        self.assertIn('torch.compile(talker.code_predictor.model, dynamic=True)', source)
+        # Flag-gated provisioning mirrors LLAMA_DOWNLOAD_MODELS: opt-in, offline-safe.
+        self.assertIn("os.environ.get('PRAXIS_QWEN_TTS_DOWNLOAD', '') != '1'", source)
+        self.assertIn("environment.pop('HF_HUB_OFFLINE', None)", source)
+        self.assertIn('fcntl.flock', source)
+
+    def test_vosk_startup_provisions_large_models_only_when_authorized(self):
+        source = (ROOT / 'scripts' / 'run_vosk.py').read_text()
+        self.assertIn("os.environ.get('VOSK_DOWNLOAD_MODELS', '') == '1'", source)
+        for model in ('vosk-model-de-0.21', 'vosk-model-fr-0.22', 'vosk-model-ja-0.22'):
+            self.assertIn(model, source)
+        self.assertIn('am/final.mdl', source)
+        self.assertIn('os.execv', source)
+
+    def test_supervisor_runs_vosk_through_the_provisioning_wrapper(self):
+        import configparser
+        c = configparser.ConfigParser(interpolation=None)
+        c.read(ROOT / 'supervisord.conf')
+        self.assertIn('run_vosk.py', c['program:vosk']['command'])
+        self.assertNotIn('vosk_server.py', c['program:vosk']['command'])
+
+    def test_dockerfile_pins_flashattention_wheel_and_image_checks_it(self):
+        docker = (ROOT / 'Dockerfile').read_text()
+        self.assertIn('flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl', docker)
+        self.assertIn('75c51f34bb93c5a4438d6b767547ca6c22a9bfc6b29b5646dda98e943cd75d99', docker)
+        verify = (ROOT / 'scripts' / 'verify-image.sh').read_text()
+        self.assertIn('import flash_attn', verify)
+        self.assertIn('py_compile /opt/praxis/bin/run_vosk.py', verify)
 
 
 if __name__ == '__main__': unittest.main()

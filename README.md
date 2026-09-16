@@ -13,6 +13,11 @@ replaces Ollama; **FreeToken is not installed or run**.
 - Runtime env opts into automatic download, SHA256 verification, two one-time
   code/chat routing traces (up to 512 generated tokens each), and merged-profile reuse.
 - Existing **Vosk DE/FR/JA, ComfyUI, XTTS, Qwen3-TTS, workflows and NetBird** retained.
+- **Speech provisioning is flag-gated** like the llama downloads: `PRAXIS_QWEN_TTS_DOWNLOAD=1`
+  fetches the pinned Qwen3-TTS Base model, `VOSK_DOWNLOAD_MODELS=1` fetches the
+  **large** Vosk de-0.21/fr-0.22/ja-0.22 models before the server starts.
+- Qwen3-TTS synthesis runs on measured-fastest **sdpa with torch.compile enabled**
+  (~2× per-token decode on RTX 3090); `flash_attention_2` stays an opt-in.
 - Nomic embeddings remain available through a second, CPU-only llama-server.
 - Same private VPN ports: **11434** (now OpenAI-compatible), **8188**, **2700**.
 

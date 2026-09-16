@@ -12,6 +12,8 @@ for env in comfy tts qwen-tts vosk; do /opt/"$env"-venv/bin/pip check; done
 /opt/tts-venv/bin/python -c 'from TTS.api import TTS; print("XTTS import OK")'
 /opt/qwen-tts-venv/bin/python -c 'from qwen_tts import Qwen3TTSModel; print("Qwen3 import OK")'
 /opt/vosk-venv/bin/python -c 'import vosk, aiohttp; print("Vosk HTTP/WebSocket imports OK")'
+/opt/qwen-tts-venv/bin/python -c 'import flash_attn; print("flash_attn", flash_attn.__version__, "wheel OK")'
+python3 -m py_compile /opt/praxis/bin/run_vosk.py && echo 'run_vosk wrapper OK'
 ! command -v ollama
 ! command -v freetoken
 /opt/llama.cpp/bin/llama-server --help >/tmp/llama-help

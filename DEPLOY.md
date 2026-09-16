@@ -401,7 +401,9 @@ workflows in `/workspace/workflows`, with GUI examples in
    mode 600. Never commit personal audio.
 2. Review XTTS terms and set `COQUI_TOS_AGREED=1` **only if you accept them**.
    XTTS may download on first use into persistent `/workspace/tts`.
-3. Explicitly download the separate **speech** model (not the Flash text model):
+3. Flag-gated speech provisioning mirrors `LLAMA_DOWNLOAD_MODELS` — with
+   `PRAXIS_QWEN_TTS_DOWNLOAD=1` and `VOSK_DOWNLOAD_MODELS=1` in the environment
+   the stack provisions everything at startup with no manual step:
 
    ```sh
    /opt/qwen-tts-venv/bin/python \
@@ -411,7 +413,32 @@ workflows in `/workspace/workflows`, with GUI examples in
    This installs pinned `Qwen/Qwen3-TTS-12Hz-1.7B-Base` at
    `/workspace/qwen3-tts/1.7B-Base`. Speech inference is offline-only and requires
    CUDA, without silent CPU/provider fallback. Transformers environments remain
-   isolated from XTTS. See [speech details](docs/COMFYUI_QWEN3.md).
+   isolated from XTTS. See [speech details](docs/COMFYUI_QWEN3.md). The worker
+   runs the same pinned download automatically before its first load when
+   `PRAXIS_QWEN_TTS_DOWNLOAD=1`; a flock serializes concurrent workers.
+
+   The Vosk service starts through `run_vosk.py`: with `VOSK_DOWNLOAD_MODELS=1`
+   it provisions the **large** publisher models (Apache-2.0, CRC- and
+   layout-validated, path-safety checked) before executing the unchanged
+   `vosk_server.py`: German `vosk-model-de-0.21` (~2.9 GB), French
+   `vosk-model-fr-0.22`, Japanese `vosk-model-ja-0.22` (~1.6 GB) in
+   `/workspace/vosk/<lang>`. Japanese transcription quality improved from
+   garbled small-model output to correct full sentences. Without the flag the
+   server starts immediately and missing models surface as HTTP 503, as before.
+
+   **Qwen3-TTS speed policy on the GPU host** (measured on RTX 3090):
+
+   - **torch.compile** on the talker and code predictor roughly halves the
+     per-token decode time (123 ms/step to 65 ms). It is enabled by default
+     (`PRAXIS_QWEN_TTS_COMPILE=0` disables); the first worker start pays a
+     one-time ~50-100 s compile, amortized by the warm idle window
+     (`PRAXIS_QWEN_TTS_IDLE_SECONDS=600`).
+   - **Attention stays on `sdpa`**: `flash_attention_2` measured consistently
+     slower (13.9-15.4 s vs 10.3-11.9 s for identical text), so it remains an
+     opt-in via `PRAXIS_QWEN_TTS_ATTN=flash_attention_2` (the pinned wheel is
+     installed in the image and verified at build time).
+   - Mixed DE/JA replies measured: 75 s (previous deployment, fa2) -> 27 s warm
+     with compile; single Japanese sentences synthesize in ~4-5 s.
 
    A loaded ComfyUI node does **not** mean these ~4.5 GB speech weights are installed.
    In warm mode, missing weights surface as `Qwen warm worker failed; owned worker
@@ -421,7 +448,9 @@ workflows in `/workspace/workflows`, with GUI examples in
    e.g. `reference.wav`, **not** `/workspace/input/reference.wav`. Uploading a voice
    does not change an existing workflow's selected filename.
 4. Obtain/verify an SDXL checkpoint separately in `/workspace/models/checkpoints`.
-5. Provision the existing small DE/FR/JA Vosk models:
+5. Provision Vosk models: the flag-gated `run_vosk.py` startup handles the
+   **large** publisher models automatically with `VOSK_DOWNLOAD_MODELS=1`; the
+   legacy small-model command stays available for thin hosts:
 
    ```sh
    python3 /opt/praxis/bin/provision_vosk.py

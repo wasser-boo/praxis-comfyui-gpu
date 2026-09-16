@@ -69,6 +69,13 @@ RUN /opt/qwen-tts-venv/bin/pip install torch==2.8.0 torchaudio==2.8.0 --index-ur
 RUN /opt/qwen-tts-venv/bin/pip install -r /opt/ComfyUI/custom_nodes/praxis_xtts/qwen-requirements.txt \
     && /opt/qwen-tts-venv/bin/pip check \
     && /opt/qwen-tts-venv/bin/python -c 'from qwen_tts import Qwen3TTSModel'
+# Pinned FlashAttention wheel for the PRAXIS_QWEN_TTS_ATTN=flash_attention_2 opt-in.
+# Measured slower than sdpa for this workload on RTX 3090; sdpa stays the default.
+RUN curl -fsSL --output "/tmp/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl" "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl" \
+    && echo "75c51f34bb93c5a4438d6b767547ca6c22a9bfc6b29b5646dda98e943cd75d99  /tmp/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl" | sha256sum -c - \
+    && /opt/qwen-tts-venv/bin/pip install --no-cache-dir "/tmp/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl" \
+    && rm "/tmp/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl" \
+    && /opt/qwen-tts-venv/bin/python -c 'import flash_attn; assert flash_attn.__version__ == "2.8.3"'
 COPY scripts /opt/praxis/bin
 COPY supervisord.conf /etc/supervisor/praxis.conf
 COPY workflows /opt/praxis/workflows

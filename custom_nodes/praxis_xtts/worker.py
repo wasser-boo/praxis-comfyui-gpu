@@ -1,12 +1,17 @@
 """Isolated XTTS/Qwen worker: one-shot by default, optional private Qwen IPC.
 
 Warm mode retains one Qwen model and one reference prompt only until the parent
-idle timeout. No model downloads, HTTP listener, quality reduction or GPU fallback.
+idle timeout. No HTTP listener, quality reduction or GPU fallback. When
+PRAXIS_QWEN_TTS_DOWNLOAD=1, a missing pinned Qwen3-TTS model is provisioned
+once before the first load; no other implicit download path exists.
 """
+import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import time
 
@@ -45,6 +50,36 @@ def xtts(request):
     write_speech(request['output'], segments, generate)
 
 
+def ensure_qwen_model(directory: Path) -> None:
+    """Provision the pinned Qwen3-TTS model once, authorized by PRAXIS_QWEN_TTS_DOWNLOAD.
+
+    The node pins HF_HUB_OFFLINE for inference. The download subprocess strips those
+    variables and reuses the same pinned repository/revision as the manual command.
+    A lock serializes concurrent workers; completion is signaled by config.json.
+    """
+    if (directory / 'config.json').is_file():
+        return
+    if os.environ.get('PRAXIS_QWEN_TTS_DOWNLOAD', '') != '1':
+        raise RuntimeError('Qwen3-TTS model missing; set PRAXIS_QWEN_TTS_DOWNLOAD=1 '
+                           'or run download_qwen_model.py --download')
+    from download_qwen_model import MODEL, REVISION
+    print(f'Qwen3-TTS model missing; downloading {MODEL} @ {REVISION}', flush=True)
+    lock_path = directory.parent / '.qwen-download.lock'
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open('a+') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if (directory / 'config.json').is_file():
+            return  # provisioned by a concurrent worker while waiting for the lock
+        environment = os.environ.copy()
+        environment.pop('HF_HUB_OFFLINE', None)
+        environment.pop('TRANSFORMERS_OFFLINE', None)
+        script = Path(__file__).with_name('download_qwen_model.py')
+        subprocess.run([sys.executable, str(script), '--download', '--directory', str(directory)],
+                       check=True, timeout=3600, env=environment)
+    if not (directory / 'config.json').is_file():
+        raise RuntimeError('Qwen3-TTS provisioning did not produce the pinned model')
+
+
 class QwenEngine:
     def __init__(self):
         self.model = self.prompt = self.reference_key = None
@@ -78,8 +113,28 @@ class QwenEngine:
             from qwen_tts import Qwen3TTSModel
             if not torch.cuda.is_available():
                 raise RuntimeError('Qwen3-TTS requires CUDA')
+            ensure_qwen_model(directory)
+            attn = os.environ.get('PRAXIS_QWEN_TTS_ATTN', '')
+            if not attn:
+                # Measured on RTX 3090: sdpa beats flash_attention_2 for this workload
+                # (short decode steps dominate, not attention kernels).
+                attn = 'sdpa'
+            if attn not in ('sdpa', 'flash_attention_2'):
+                raise ValueError('PRAXIS_QWEN_TTS_ATTN must be sdpa or flash_attention_2')
+            if attn == 'flash_attention_2' and importlib.util.find_spec('flash_attn') is None:
+                raise RuntimeError('PRAXIS_QWEN_TTS_ATTN=flash_attention_2 requires the flash-attn wheel')
             self.model = Qwen3TTSModel.from_pretrained(str(directory), device_map='cuda:0',
-                dtype=torch.bfloat16, attn_implementation='sdpa', local_files_only=True, trust_remote_code=False)
+                dtype=torch.bfloat16, attn_implementation=attn, local_files_only=True, trust_remote_code=False)
+            if os.environ.get('PRAXIS_QWEN_TTS_COMPILE', '1') != '0':
+                try:
+                    # Cuts ~123 ms/step to ~65 ms on RTX 3090; one-time compile cost
+                    # per worker process, amortized by the warm idle window.
+                    talker = self.model.model.talker
+                    talker.model = torch.compile(talker.model, dynamic=True)
+                    talker.code_predictor.model = torch.compile(talker.code_predictor.model, dynamic=True)
+                    print('qwen tts: torch.compile enabled for talker + code predictor', flush=True)
+                except Exception as error:
+                    print(f'qwen tts: torch.compile skipped ({type(error).__name__})', flush=True)
         loaded = time.perf_counter()
         if not cached:
             self.prompt = self.model.create_voice_clone_prompt(ref_audio=str(reference),
