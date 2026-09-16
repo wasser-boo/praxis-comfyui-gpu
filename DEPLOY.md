@@ -11,10 +11,19 @@ The text backend is **https://github.com/thecodacus/llama.cpp/tree/perf**, pinne
 `27c54b4bbcefadedcec6397477cc2e866c1db716`. It is **not** FreeToken, upstream stock
 llama.cpp, or the GenerelSchwerz fork linked in the video's description.
 
-Validated here: offline source tests; a CPU-only build of that exact fork's
-`llama-server` and `llama-moe-trace`; argument parsing and empty-model router HTTP
-checks. **No CUDA Docker image was built/published and no Flash GPU inference was
-run here.** The upstream 16.6 → 24.4 tok/s result is not a measurement of this image.
+Validated: offline source tests and CPU/image API checks, followed by GPU acceptance
+of the corrected launcher on **RTX A4000 16 GB** (2026-09-16). The 48-layer/56-slot
+CUDA expert pack uploaded **5,072.27 MiB**; the shared Q8 MTP head loaded and accepted
+draft tokens. Repeated chat, a tool-call round trip, a **2,044-token prompt with
+finite per-token probabilities**, and 768-dimensional Nomic embeddings passed.
+Observed GPU memory after the long prompt: **13,373 / 16,376 MiB**. This is a
+snapshot, not a peak-memory guarantee or a full-context/concurrency/quality benchmark.
+The upstream 16.6 → 24.4 tok/s result is not a measurement of this deployment.
+
+The published **`vayayo/praxis-llamap-gpu:0.2` predates these repairs**. Its deployed
+container was hotfixed without replacing the fork binary, trunk weights or routing
+profiles. A new image build, image verification and release remain separate steps;
+pushing this repository does not update the Docker Hub tag.
 
 ## Preserved stack
 
@@ -43,12 +52,16 @@ reaches end of life in October 2026; upgrading it needs separate validation.
 `qwen4exp`, 512 experts/layer and 10 active. This is **not** `qwen3.8:27b`.
 The three shard revisions, byte sizes and publisher LFS SHA256s are pinned in
 `scripts/llama-models.json` (81,961,823,936 bytes total, approximately 82 GB).
+Those files contain the trunk only. The same pinned repository revision supplies
+`MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf` (2,786,568,256 bytes), also pinned by
+publisher SHA256 in the manifest. This is the matching MTP head, not another LLM;
+see [the publisher's MTP guide](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/MTP/README.md).
 
 The configured chat command is equivalent to:
 
 ```sh
 threads="$(python3 /opt/praxis/bin/cpu_threads.py)"
-GGML_CUDA_REGISTER_HOST=1 GGML_SCHED_PREFETCH_EXPERTS=1 \
+GGML_CUDA_REGISTER_HOST=1 GGML_SCHED_PREFETCH_EXPERTS=0 \
 /opt/llama.cpp/bin/llama-server \
   --model /workspace/llama.cpp/models/qwen3.8-flash-next/UD-IQ3_XXS/Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00003.gguf \
   --alias qwen3.8-flash-next --host 127.0.0.1 --port 11435 \
@@ -56,15 +69,21 @@ GGML_CUDA_REGISTER_HOST=1 GGML_SCHED_PREFETCH_EXPERTS=1 \
   --fit off --load-mode mmap --lazy-mode on \
   --threads "$threads" --threads-batch "$threads" --ctx-size 4096 --parallel 1 \
   --batch-size 512 --ubatch-size 512 --jinja --cache-ram 0 \
-  --moe-cache-profile /workspace/llama.cpp/profiles/qwen3.8-flash-next-merged.csv \
+  --verbosity 4 --moe-cache-profile /workspace/llama.cpp/profiles/qwen3.8-flash-next-merged.csv \
   --moe-cache-slots 56 --spec-type draft-mtp \
+  --spec-draft-model /workspace/llama.cpp/models/qwen3.8-flash-next/MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf \
+  --spec-draft-ngl 99 --spec-draft-n-max 2 \
   --spec-draft-threads "$threads" --spec-draft-threads-batch "$threads" \
   --no-webui --no-slots --no-warmup
 ```
 
 - **56 slots**, from the Flash benchmark row, **not** the generic 112-slot example.
-- Integrated **`--spec-type draft-mtp`** is always passed. No unrelated draft model
-  is substituted or downloaded. The model's MTP tensors are used.
+- **`--spec-type draft-mtp`** and **`--spec-draft-model`** are always passed.
+  The shared Q8 head borrows the main model's embedding/output tensors; its own
+  layers are GPU-offloaded, with at most two draft tokens per step. The pinned
+  Codacus fork supports this pairing. Omitting the separate head fails with
+  `model doesn't contain MTP layers`; disabling MTP is not the repair.
+  Missing/invalid head weights fail before profiling or starting the server.
 - **One worker per available physical core**, detected automatically instead of
   hard-coding six or counting SMT threads. Codacus's six-core CPU selects six
   workers if container limits allow it. Generation, prompt processing, MTP,
@@ -73,13 +92,43 @@ GGML_CUDA_REGISTER_HOST=1 GGML_SCHED_PREFETCH_EXPERTS=1 \
   tokens each** at **4096 context**, then concatenated into one model-specific CSV.
   Generation may stop earlier at EOS. The trace command uses `-ngl 99 -ncmoe 99`,
   Flash Attention and the same thread/loading settings, without an expert cache.
-- Host registration and expert prefetch enable Codacus's documented opt-in patches.
-  Async CPU splits stay enabled by the fork's default; no additional experimental
-  algorithms, TurboQuant settings or alternative fork flags are introduced.
+- Host registration remains enabled. **Experimental expert prefetch is disabled**:
+  with `GGML_SCHED_PREFETCH_EXPERTS=1`, a ~315-token tool prompt produced repeated
+  `/` characters and non-finite probabilities, poisoning subsequent requests.
+  Disabling CUDA graphs did not fix it; disabling prefetch did. The launcher removes
+  this flag even when an old template still supplies `1`, and warns at chat startup.
+  Update old environments to `GGML_SCHED_PREFETCH_EXPERTS=0` too. This fences off the
+  observed fork issue; it is not a claimed C++ root-cause repair.
+  **CUDA graphs, async CPU splits, host pinning, the 56-slot pack and MTP remain on.**
+  No TurboQuant, model/weight changes or alternative fork flags are introduced.
 - The README's `-fa 1` example is stale for the pinned parser: use **`--flash-attn on`**.
 - **4096 context and 512 batch/ubatch are conservative deployment defaults**, not
   a claim to have recovered every benchmark setting from the video. No automatic
   increase to the old 262144 context, quantization change or VRAM-based tuning.
+
+### Persistent instance tuning without restarting the whole stack
+
+Environment variables still define portable defaults. Optional
+**`/workspace/llama.cpp/runtime-settings.json`** takes precedence for the bounded
+keys `LLAMA_CONTEXT_SIZE`, `LLAMA_BATCH_SIZE`, `LLAMA_UBATCH_SIZE`,
+`LLAMA_MOE_CACHE_SLOTS` and `LLAMA_THREADS` only. Example for a measured 32k instance:
+
+```json
+{"LLAMA_CONTEXT_SIZE": 32768}
+```
+
+This file stays in the persistent volume, not Git. Preserve any other existing
+values, write it atomically with mode 600, and deliberately restart **only**
+`llama-chat` after its callers are idle. Launcher and readiness checks read the
+same tuning, even if Supervisor inherited an older 4096 environment. Its values
+are also passed into the child environment. Embeddings retain their own 2048
+context, and routing traces stay at 4096; no profile regeneration is necessary.
+A `LLAMA_THREADS` override also changes the embedding worker budget, so deliberately
+restart `llama-embedding` too when changing threads (not for a chat-context change).
+Unknown keys, symlinks, non-regular files, oversized JSON and out-of-range values
+fail closed. This file cannot enable downloads/prefetch or change keys, models or
+listeners. The image/example default remains 4096 for smaller cards. Measure VRAM
+and prompts before adopting 32768; a configured limit is not a full-window benchmark.
 
 ### Hardware and shared VRAM
 
@@ -141,6 +190,7 @@ licenses, and enter the NetBird setup key privately. Relevant selections:
 ```dotenv
 LLAMA_DOWNLOAD_MODELS=1
 LLAMA_MODEL_DIR=/workspace/llama.cpp/models/qwen3.8-flash-next/UD-IQ3_XXS
+LLAMA_MTP_MODEL_DIR=/workspace/llama.cpp/models/qwen3.8-flash-next/MTP
 LLAMA_GENERATE_PROFILE=1
 LLAMA_MOE_CACHE_PROFILE=/workspace/llama.cpp/profiles/qwen3.8-flash-next-merged.csv
 LLAMA_MOE_CACHE_SLOTS=56
@@ -149,7 +199,7 @@ LLAMA_CONTEXT_SIZE=4096
 LLAMA_BATCH_SIZE=512
 LLAMA_UBATCH_SIZE=512
 GGML_CUDA_REGISTER_HOST=1
-GGML_SCHED_PREFETCH_EXPERTS=1
+GGML_SCHED_PREFETCH_EXPERTS=0
 LLAMA_EMBEDDING_ENABLED=1
 LLAMA_EMBEDDING_MODEL_DIR=/workspace/llama.cpp/models/nomic-embed-text
 ```
@@ -158,8 +208,9 @@ At startup, **`llama-chat`**:
 
 1. Validates settings and checks the **fork binary's CUDA device list**, refusing
    a CPU-only chat fallback.
-2. Verifies existing selected GGUF files; downloads only missing shards if
-   `LLAMA_DOWNLOAD_MODELS=1`, using the pinned Hugging Face revision over HTTPS.
+2. Verifies existing selected GGUF files, including the separate MTP head;
+   downloads only missing files if `LLAMA_DOWNLOAD_MODELS=1`, using the pinned
+   Hugging Face revision over HTTPS.
    Every new download is streamed to `.part`, SHA256-checked, and published without
    overwriting an existing file. Existing weights with bad sizes/hashes fail clearly.
 3. Generates the two generic routing traces if the merged profile is missing and
@@ -170,7 +221,11 @@ At startup, **`llama-chat`**:
    `init_moe_expert_cache: expert cache: ... layers x 56 slots, ... uploaded to CUDA0`.
    A disabled-cache/no-CPU-MoE fallback is fatal. Health additionally requires
    `/health` and a cache-activation receipt tied to the current process and settings.
-   No activation line means it cannot pass readiness.
+   Log verbosity is explicitly **4**: this revision hides the library's cache
+   activation INFO at the default level 3. The main model must activate its cache
+   before MTP loading starts. The GPU-only MTP head's later `no CPU-resident MoE
+   layers` message does not invalidate that verified main-model pack.
+   No main-model activation line means it cannot pass readiness.
 
 The independent `llama-embedding` program verifies/downloads pinned Nomic and
 serves `/v1/embeddings` on CPU at **2048 context**. It never receives Flash's cache,
@@ -197,6 +252,7 @@ not protection against a hostile storage administrator. For a full audit:
 
 ```sh
 python3 /opt/praxis/bin/provision_llama.py --kind chat --rehash
+python3 /opt/praxis/bin/provision_llama.py --kind mtp --rehash
 python3 /opt/praxis/bin/provision_llama.py --kind embedding --rehash
 ```
 
@@ -206,6 +262,9 @@ Point `LLAMA_MODEL_DIR` at the directory containing **all three original shard
 filenames**, for example your existing `UD-IQ3_XXS` directory. They must match the
 pinned hashes; no unnecessary second download or silent replacement occurs.
 Do not point llama.cpp at Ollama manifests/blobs or the old 27B model.
+Set `LLAMA_MTP_MODEL_DIR` separately if the matching shared Q8 head already exists
+elsewhere. Otherwise only that missing ~2.8 GB file needs downloading. Adding this
+head does not change the trunk/profile recipe or regenerate existing valid traces.
 
 Point `LLAMA_MOE_CACHE_PROFILE` at an existing merged **Flash Next** routing CSV.
 Profiles generated by this stack are reused automatically. An external CSV has
@@ -283,7 +342,10 @@ internal **11435/11436**, SOCKS 1080 or broad all-to-all access. The APIs have n
 independent user authentication. Public mappings are not safe.
 
 The nginx frontend streams without buffering/retries, rejects browser `Origin`
-headers, and exposes only the API routes listed above. No browser UI, MCP proxy,
+headers, and exposes only the API routes listed above. **`/` returning 404 is
+intentional**, not a failed connection. Use `/health` or `/v1/models`. During model
+preparation, the chat routes can return 502 while the independent embedding route
+is already healthy; do not interrupt a working download based on that alone. No browser UI, MCP proxy,
 model-management or slots endpoints are exposed. Backend `/props` remains
 available only locally for diagnostics. **Port 11434 is no longer an Ollama API**;
 `/api/chat`, `/api/tags` and `/api/embeddings` are deliberately not emulated.
@@ -350,6 +412,14 @@ workflows in `/workspace/workflows`, with GUI examples in
    `/workspace/qwen3-tts/1.7B-Base`. Speech inference is offline-only and requires
    CUDA, without silent CPU/provider fallback. Transformers environments remain
    isolated from XTTS. See [speech details](docs/COMFYUI_QWEN3.md).
+
+   A loaded ComfyUI node does **not** mean these ~4.5 GB speech weights are installed.
+   In warm mode, missing weights surface as `Qwen warm worker failed; owned worker
+   stopped, request NOT retried` because worker errors deliberately do not echo
+   private text. Provision the model before retrying; no ComfyUI restart is needed.
+   In the workflow's `reference_audio` field use only the input-relative filename,
+   e.g. `reference.wav`, **not** `/workspace/input/reference.wav`. Uploading a voice
+   does not change an existing workflow's selected filename.
 4. Obtain/verify an SDXL checkpoint separately in `/workspace/models/checkpoints`.
 5. Provision the existing small DE/FR/JA Vosk models:
 
@@ -410,6 +480,33 @@ supervisorctl -c /etc/supervisor/praxis.conf start llama-chat
 ```
 
 A failed LLM startup leaves the other services running, but readiness stays false.
+`RUNNING` alone is not readiness: the process may still be downloading/profiling,
+and even an HTTP-200 first reply missed the prefetch regression. Use the bounded
+multi-request acceptance below before treating the LLM as usable.
+
+For a separate speech/image machine, stopping only `llama-chat` leaves the Nomic
+server and nginx alive. Stop **`llama-chat`, `llama-embedding`, `llama-proxy`** and set
+`autostart=false` in those three `/etc/supervisor/praxis.conf` program sections if
+they must stay off across Supervisor/container restarts. Apply with `reread`, then
+`update llama-chat llama-embedding llama-proxy`, **not** a whole-stack restart.
+Do not delete cached models. A replacement container uses its image/template
+again. The current whole-stack Docker healthcheck is **not role-aware** and will
+remain unhealthy with the LLM intentionally disabled; check ComfyUI/Vosk separately.
+
+If SSH/tmux rejects `TERM=xterm-kitty`, install that terminal's actual definition
+rather than changing its advertised capabilities. From the Kitty client machine:
+
+```sh
+infocmp -x xterm-kitty | ssh -p SSH_PORT root@GPU_IP 'tic -x -o /root/.terminfo /dev/stdin'
+```
+
+This changes only root's terminfo; no service or existing tmux session needs a restart.
+
+A setup key exported in an SSH shell does **not** alter Supervisor's inherited
+environment. Correct the Vast instance environment for future starts; recover only
+the NetBird component if needed. Preserve `/workspace/netbird` and its identity,
+and never put a setup key in the image, repository or command history. A manually
+started NetBird daemon can be connected even while Supervisor reports it STOPPED.
 No automatic crash retry repeatedly downloads/models/profiles or hammers the GPU.
 For intentional idle-GPU maintenance, stop/start only the necessary Supervisor
 program. The Unix control socket is private (0700); the startup lock prevents a
@@ -438,6 +535,24 @@ and restricted ACLs. Keep the Praxis database, Discord tokens and master key on
 the Praxis machine. Git is not a backup of runtime data or voices.
 
 ## GPU acceptance before publishing
+
+After startup is ready and other clients are idle:
+
+```sh
+python3 /opt/praxis/bin/acceptance_llama.py --run \
+  --output /workspace/logs/llama-acceptance-$(date -u +%Y%m%dT%H%M%SZ).json
+```
+
+This explicitly authorizes six bounded generations (max 128 tokens each) and one
+CPU embedding. It checks repeated short prompts, a simulated arithmetic tool round
+trip, ~2k prompt tokens, non-greedy generation, a fresh request afterwards, finite
+token probabilities and accepted MTP drafts. It uses the existing private-IP,
+no-proxy/no-redirect bounded HTTP helpers; failures are not retried, and reports
+never overwrite existing files. The report contains generic test outputs, not
+personal prompts or audio. Also inspect the main-model cache activation receipt:
+this API smoke is not a benchmark or a guarantee about all future model outputs.
+
+The remaining release/whole-stack acceptance checklist still applies:
 
 - [ ] CUDA image build, all four `pip check`s and `scripts/verify-image.sh` pass.
 - [ ] Archive image digest and package lists; confirm binary revision matches `LLAMA_CPP.json`.

@@ -100,6 +100,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertTrue(plan['download'])
         self.assertTrue(plan['generate_profile'])
         self.assertEqual((plan['slots'], plan['threads'], plan['context']), (56, 6, 4096))
+        self.assertEqual(env['GGML_SCHED_PREFETCH_EXPERTS'], '0')
+        self.assertNotIn('GGML_SCHED_PREFETCH_EXPERTS', config.child_environment(env))
         self.assertIn('draft-mtp', config.server_command('chat', env))
         embedding = config.server_command('embedding', env)
         self.assertEqual(embedding[embedding.index('--ctx-size') + 1], '2048')

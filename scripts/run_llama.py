@@ -14,7 +14,7 @@ import signal
 import subprocess
 import sys
 
-from llama_config import BIN, child_environment, server_command, settings
+from llama_config import BIN, child_environment, runtime_environment, server_command, settings
 from profile_llama import ensure_profile
 from provision_llama import atomic_json, provision, read_receipt
 
@@ -69,12 +69,17 @@ def serve(kind, env):
     if kind == 'embedding' and not config['embedding']:
         print('llama.cpp embedding service explicitly disabled', flush=True)
         return 0
-    mode = 'auto: physical cores, affinity and CPU quota' if env.get('LLAMA_THREADS', 'auto') == 'auto' else 'manual override'
+    mode = 'auto: physical cores, affinity and CPU quota' if runtime_environment(env).get('LLAMA_THREADS', 'auto') == 'auto' else 'manual override'
     print(f'llama.cpp {kind}: {config["threads"]} CPU worker threads ({mode})', flush=True)
     if kind == 'chat':
+        if config['prefetch_requested']:
+            print('WARNING: ignoring GGML_SCHED_PREFETCH_EXPERTS=1: experimental expert prefetch '
+                  'causes non-finite inference with this pinned Flash/cache recipe. '
+                  'CUDA expert cache and MTP remain enabled; update the old environment to 0.', flush=True)
         require_cuda(env)
     provision(kind, env, download=config['download'])
     if kind == 'chat':
+        provision('mtp', env, download=config['download'])
         ensure_profile(env, generate=config['generate_profile'])
     child = child_environment(env)
     if kind == 'embedding':
@@ -90,9 +95,16 @@ def serve(kind, env):
     try:
         if kind == 'embedding':
             atomic_json(state, receipt)
+        loading_draft = False
         for line in process.stdout:
             print(line, end='', flush=True)
-            if kind == 'chat' and cache_active(line, config['slots']):
+            if kind == 'chat' and 'common_speculative_init_result: loading draft model ' in line:
+                if not receipt['cache_active']:
+                    raise RuntimeError('Main model CUDA expert cache was not activated before MTP loading')
+                loading_draft = True
+            # The GPU-only MTP head inherits the fork's cache options but needs no
+            # CPU expert pack. Its "no CPU-resident MoE layers" is not a trunk fallback.
+            if kind == 'chat' and not loading_draft and cache_active(line, config['slots']):
                 receipt['cache_active'] = True
                 atomic_json(state, receipt)
         code = process.wait()

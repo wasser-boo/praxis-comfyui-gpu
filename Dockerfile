@@ -77,6 +77,8 @@ RUN chmod +x /opt/praxis/bin/*.sh \
     && grep -q -- '--moe-cache-profile' /tmp/llama-help.txt \
     && grep -q -- '--moe-cache-slots' /tmp/llama-help.txt \
     && grep -q -- 'draft-mtp' /tmp/llama-help.txt \
+    && grep -q -- '--spec-draft-model' /tmp/llama-help.txt \
+    && grep -q -- '--spec-draft-ngl' /tmp/llama-help.txt \
     && /opt/llama.cpp/bin/llama-moe-trace --help > /dev/null
 # Syntax check only: nginx does not start during this build step.
 RUN mkdir -p /workspace/logs && nginx -t -c /opt/praxis/bin/llama-proxy.conf
