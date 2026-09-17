@@ -11,6 +11,8 @@ REVISION = '27c54b4bbcefadedcec6397477cc2e866c1db716'
 MANIFEST = Path(__file__).with_name('llama-models.json')
 RUNTIME_SETTINGS = Path('/workspace/llama.cpp/runtime-settings.json')
 TUNING_KEYS = {'LLAMA_CONTEXT_SIZE', 'LLAMA_BATCH_SIZE', 'LLAMA_UBATCH_SIZE',
+                   'LLAMA_REASONING_EFFORT', 'LLAMA_THINKING_BUDGET',
+                   'LLAMA_REASONING_FORMAT', 'LLAMA_THINKING_BUDGET_MESSAGE',
                'LLAMA_MOE_CACHE_SLOTS', 'LLAMA_THREADS'}
 
 
@@ -109,6 +111,15 @@ def settings(env):
         'prefetch_requested': enabled(env, 'GGML_SCHED_PREFETCH_EXPERTS'),
         'download_timeout': number(env, 'LLAMA_DOWNLOAD_TIMEOUT_SECONDS', 21600, 60, 86400),
         'trace_timeout': number(env, 'LLAMA_TRACE_TIMEOUT_SECONDS', 3600, 60, 21600),
+        'reasoning_effort': (str(env['LLAMA_REASONING_EFFORT'])
+                             if env.get('LLAMA_REASONING_EFFORT') in ('minimal', 'low', 'medium', 'high', 'max', 'xhigh')
+                             else None),
+        'thinking_budget': int(env['LLAMA_THINKING_BUDGET']) if str(env.get('LLAMA_THINKING_BUDGET', '')).lstrip('-').isdigit() else None,
+        'reasoning_format': (str(env['LLAMA_REASONING_FORMAT'])
+                             if env.get('LLAMA_REASONING_FORMAT') in ('none', 'deepseek', 'deepseek-legacy')
+                             else None),
+        'thinking_budget_message': (str(env['LLAMA_THINKING_BUDGET_MESSAGE'])
+                                    if env.get('LLAMA_THINKING_BUDGET_MESSAGE') else None),
     }
 
 
@@ -162,6 +173,14 @@ def server_command(kind, env):
             '--spec-draft-ngl', '99', '--spec-draft-n-max', '2',
             '--spec-draft-threads', str(config['threads']),
             '--spec-draft-threads-batch', str(config['threads'])]
+    if kind == 'chat' and config.get('reasoning_effort'):
+        args += ['--reasoning-effort', str(config['reasoning_effort'])]
+    if kind == 'chat' and config.get('thinking_budget') is not None:
+        args += ['--reasoning-budget', str(config['thinking_budget'])]
+    if kind == 'chat' and config.get('reasoning_format'):
+        args += ['--reasoning-format', str(config['reasoning_format'])]
+    if kind == 'chat' and config.get('thinking_budget_message'):
+        args += ['--reasoning-budget-message', str(config['thinking_budget_message'])]
     else:
         # Keep the existing Nomic capability without taking VRAM from Flash/TTS.
         args += ['--embedding', '--pooling', 'mean', '--n-gpu-layers', '0',
