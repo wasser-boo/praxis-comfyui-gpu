@@ -37,7 +37,7 @@ class DeploymentTests(unittest.TestCase):
     def test_supervisor_runs_only_netbird_comfyui_and_vosk(self):
         c = configparser.ConfigParser(interpolation=None); c.read(ROOT / 'supervisord.conf')
         self.assertEqual(c['unix_http_server']['chmod'], '0700')
-        names = ['netbird', 'comfyui', 'vosk']
+        names = ['netbird', 'gpu-agent', 'comfyui', 'vosk']
         self.assertEqual({s for s in c if s.startswith('program:')}, {'program:' + n for n in names})
         for name in names:
             self.assertEqual(c['program:' + name]['stopasgroup'], 'true')

@@ -10,7 +10,13 @@ ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
     NB_NETSTACK_SKIP_PROXY=true NB_DISABLE_DNS=true NB_ENABLE_CAPTURE=false \
     NB_CONFIG=/workspace/netbird/config.json NB_STATE_DIR=/workspace/netbird \
     NB_DAEMON_ADDR=unix:///workspace/netbird/netbird.sock NB_LOG_FILE=console \
-    NB_ENTRYPOINT_SERVICE_TIMEOUT=60
+    NB_ENTRYPOINT_SERVICE_TIMEOUT=60 \
+    NB_SOCKS5_LISTENER_PORT=1080 \
+    PRAXIS_ROLE=media \
+    ROUTER_URL= PRAXIS_NODE_TOKEN= \
+    PRAXIS_AGENT_HEALTH_URLS=http://127.0.0.1:8188/object_info/PraxisQwen3TTS,http://127.0.0.1:2700/health \
+    PRAXIS_AGENT_MODEL_DIR=/workspace/vosk \
+    PRAXIS_AGENT_ACCEPTANCE_CMD=/usr/bin/python3 /opt/praxis/bin/smoke.py
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-venv python3-dev build-essential git ca-certificates \
     ffmpeg libsndfile1 espeak-ng sox libsox-fmt-all supervisor tini curl util-linux libssl3 \
@@ -51,6 +57,15 @@ RUN curl -fsSL --output "/tmp/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp
     && rm "/tmp/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl" \
     && /opt/qwen-tts-venv/bin/python -c 'import flash_attn; assert flash_attn.__version__ == "2.8.3"'
 COPY scripts /opt/praxis/bin
+# pgpu: Router-Call-home-Agent (statisches musl-Binary aus dem Router-Image)
+# + Call-home-Env. Am Stage-Ende, damit die venv-Layers gecacht bleiben.
+ARG PGPU_IMAGE=vayayo/praxis-gpu-router:0.2
+COPY --from=${PGPU_IMAGE} /gpu-agent /opt/praxis/bin/gpu-agent
+ENV NB_SOCKS5_LISTENER_PORT=1080 PRAXIS_ROLE=media \
+    ROUTER_URL= PRAXIS_NODE_TOKEN= \
+    PRAXIS_AGENT_HEALTH_URLS=http://127.0.0.1:8188/object_info/PraxisQwen3TTS,http://127.0.0.1:2700/health \
+    PRAXIS_AGENT_MODEL_DIR=/workspace/vosk \
+    PRAXIS_AGENT_ACCEPTANCE_CMD=/usr/bin/python3 /opt/praxis/bin/smoke.py
 COPY supervisord.conf /etc/supervisor/praxis.conf
 COPY workflows /opt/praxis/workflows
 RUN chmod +x /opt/praxis/bin/*.sh \
