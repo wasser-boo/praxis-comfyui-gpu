@@ -39,7 +39,12 @@ class DeploymentTests(unittest.TestCase):
             self.assertEqual(setup['startsecs'], '0')
             self.assertEqual(setup['startretries'], '0')
             self.assertIn('run_llama.py ' + kind, setup['command'])
-        self.assertIn('--user-directory /workspace/user', c['program:comfyui']['command'])
+        self.assertIn('--base-directory /workspace', c['program:comfyui']['command'])
+        # The pinned ComfyUI revision derives input/output/temp/user from --base-
+        # directory and appends a trailing "temp" to --temp-directory; redundant
+        # explicit flags would create /workspace/temp/temp.
+        for flag in ('--input-directory', '--output-directory', '--temp-directory', '--user-directory'):
+            self.assertNotIn(flag, c['program:comfyui']['command'])
         names = ['netbird', 'llama-chat', 'llama-embedding', 'llama-proxy', 'comfyui', 'vosk']
         self.assertEqual({s for s in c if s.startswith('program:')}, {'program:' + n for n in names})
         for name in names:
@@ -89,9 +94,11 @@ class DeploymentTests(unittest.TestCase):
         provenance = json.loads((base / 'UPSTREAM.json').read_text())
         # worker.py is intentionally divergent from the reviewed upstream commit:
         # the speed/provisioning policies are pinned by test_qwen_worker_speed_and_
-        # provisioning_policies instead of byte identity.
+        # provisioning_policies instead of byte identity. node.py and warm_worker.py
+        # are likewise divergent for the child-stderr diagnostics pinned by
+        # test_worker_failure_diagnostics_are_pinned.
         for name, expected in provenance['runtime_files'].items():
-            if name == 'worker.py':
+            if name in ('worker.py', 'node.py', 'warm_worker.py'):
                 continue
             self.assertEqual(hashlib.sha256((base / name).read_bytes()).hexdigest(), expected, name)
 
@@ -126,11 +133,13 @@ class DeploymentTests(unittest.TestCase):
     def test_existing_speech_vosk_and_workflows_are_byte_identical_to_base(self):
         import hashlib
         base = json.loads((ROOT / 'BASE_STACK.json').read_text())
-        # praxis_xtts/worker.py is intentionally divergent: measured attention
-        # default, flag-gated provisioning and torch.compile are pinned by the
-        # dedicated tests below instead of byte identity against the base stack.
+        # praxis_xtts worker.py, node.py and warm_worker.py are intentionally
+        # divergent from the base stack: measured attention default, flag-gated
+        # provisioning, torch.compile and child-stderr diagnostics are pinned by
+        # the dedicated tests below instead of byte identity against base hashes.
         for path, expected in base['sha256'].items():
-            if path == 'custom_nodes/praxis_xtts/worker.py':
+            if path in ('custom_nodes/praxis_xtts/worker.py', 'custom_nodes/praxis_xtts/node.py',
+                        'custom_nodes/praxis_xtts/warm_worker.py'):
                 continue
             if path.startswith(('custom_nodes/', 'workflows/', 'docs/')) or path in [
                 'constraints.txt', 'scripts/vosk_server.py', 'scripts/provision_vosk.py',
@@ -151,6 +160,32 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("os.environ.get('PRAXIS_QWEN_TTS_DOWNLOAD', '') != '1'", source)
         self.assertIn("environment.pop('HF_HUB_OFFLINE', None)", source)
         self.assertIn('fcntl.flock', source)
+        # Provisioning must run BEFORE the completeness error: a fresh box has an
+        # empty model directory, so the authorized download path stays reachable.
+        seek = source.index('if not qwen_model_complete(directory):')
+        after = source[seek:]
+        self.assertLess(after.index('ensure_qwen_model(directory)'),
+                        after.index('Install the pinned Qwen3-TTS Base model locally before synthesis'))
+
+    def test_worker_failure_diagnostics_are_pinned(self):
+        root = ROOT / 'custom_nodes' / 'praxis_xtts'
+        worker = (root / 'worker.py').read_text()
+        warm = (root / 'warm_worker.py').read_text()
+        node = (root / 'node.py').read_text()
+        # The missing-model error must appear only AFTER the authorized download path.
+        seek = worker.index('if not qwen_model_complete(directory):')
+        after = worker[seek:]
+        self.assertLess(after.index('ensure_qwen_model(directory)'),
+                        after.index('Install the pinned Qwen3-TTS Base model locally before synthesis'))
+        # A partial download is reported, never silently reused.
+        self.assertIn('interrupted download', worker)
+        # Child stderr is bounded, persisted for operators, but never echoed to users.
+        for source, text in [(warm, 'stderr=subprocess.PIPE'), (warm, 'persist_stderr_tail'),
+                             (warm, '/workspace/logs/qwen-worker.log'),
+                             (node, 'stderr=subprocess.PIPE'), (node, 'persist_stderr_tail')]:
+            self.assertIn(text, source)
+        self.assertIn('request NOT retried', warm)
+        self.assertIn('from None', node)
 
     def test_vosk_startup_provisions_large_models_only_when_authorized(self):
         source = (ROOT / 'scripts' / 'run_vosk.py').read_text()

@@ -1,11 +1,11 @@
 {
-  "repository": "https://forgejo.the.grid/Marvin/praxis-gpu",
   "commit": "d3a28a6b7749948ba239a001a9eeeedafb17f850",
   "copied": "tracked files only; no history, runtime data, credentials or NetBird identity",
+  "repository": "https://forgejo.the.grid/Marvin/praxis-gpu",
   "sha256": {
     ".dockerignore": "b22982061c905afc77930889782274bddf3eca1699fed9b8d5e37d4c9cabeb75",
     ".gitignore": "445850e194acb6c44678793e8a8ca0388ed7fdbce52a365dc40428fae7118278",
-    "DEPLOY.md": "b47b3a560903f609098381e7a55b707232ec56da248fa4d5c3b01a49b21a0e5e",
+    "DEPLOY.md": "20f19969faaa760739ea07b3f00a11cc4bc1f7395a90eee5404f885342796cd6",
     "Dockerfile": "2fd6ef3894fe08780fbbf255de2f592afbc13b4b0f2455623aafc0d323d6894b",
     "constraints.txt": "ea2c767c760c116389ddfb1796976096e978488b2e9272dbb0373141d62d7999",
     "custom_nodes/praxis_xtts/README.md": "691602b1e36d0780cb32255422c5c3c4b2359dd6193ed53a88008dd9bd499185",
@@ -19,7 +19,7 @@
     "custom_nodes/praxis_xtts/segments.py": "cfebb364c294a85442f59310a1f4973a00bd1dd5be91aec9df911d773570bc85",
     "custom_nodes/praxis_xtts/warm_worker.py": "09c2a218d115c2af6dd1392840c0440f83ac0c392175b5ad4d214ccf6a63eeca",
     "custom_nodes/praxis_xtts/worker.py": "964508913222ff857a274494c1e2c127b5654c410b9b402c58a5c31f2a06153f",
-    "docs/COMFYUI_QWEN3.md": "b351858593caa073d020f6968bfceadb17b3b3efab3c5361360cd0b7d7fc2165",
+    "docs/COMFYUI_QWEN3.md": "526ee91a43cfb577972f232485002ba08be087ad9ae62ec55e960dfb17844d1c",
     "runtime.env.example": "194aa40650e32c8ec7b64755cbcd0055dcfca616e3d6a8754ed0ec3de6443d29",
     "scripts/build.sh": "4d37b16d8585665edec903da195771372891eda8932e3388660fc25509a7922d",
     "scripts/ensure_ollama_cuda.py": "35d5a273705c783f334129cc39bad66e169f0edf8e56183d76f56ff4fef71258",

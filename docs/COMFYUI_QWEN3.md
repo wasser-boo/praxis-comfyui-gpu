@@ -53,8 +53,10 @@ Praxis alone does not install a model or reload ComfyUI.
 
 The package preserves the `PraxisXTTS` node ID and adds `PraxisQwen3TTS`. Qwen runs
 in a **separate virtualenv** so its Transformers dependencies do not change XTTS
-or ComfyUI. Provision the pinned public model explicitly first; Qwen inference is
-offline-only and never downloads weights or uses a cloud TTS service.
+or ComfyUI. Provision the pinned public model explicitly first (the worker also
+provisions it automatically before the first load when `PRAXIS_QWEN_TTS_DOWNLOAD=1`
+in the environment); Qwen **inference** is offline-only and never downloads
+weights or uses a cloud TTS service.
 
 Never restart services while jobs/VM work need saving. After backing up files,
 activate the server package during a maintenance window and rebuild Praxis with

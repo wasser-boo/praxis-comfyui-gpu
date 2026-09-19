@@ -403,7 +403,8 @@ workflows in `/workspace/workflows`, with GUI examples in
    XTTS may download on first use into persistent `/workspace/tts`.
 3. Flag-gated speech provisioning mirrors `LLAMA_DOWNLOAD_MODELS` — with
    `PRAXIS_QWEN_TTS_DOWNLOAD=1` and `VOSK_DOWNLOAD_MODELS=1` in the environment
-   the stack provisions everything at startup with no manual step:
+   the stack provisions everything with no manual step: Vosk at startup, the
+   Qwen model on the first worker load (before the first synthesis):
 
    ```sh
    /opt/qwen-tts-venv/bin/python \
@@ -415,7 +416,10 @@ workflows in `/workspace/workflows`, with GUI examples in
    CUDA, without silent CPU/provider fallback. Transformers environments remain
    isolated from XTTS. See [speech details](docs/COMFYUI_QWEN3.md). The worker
    runs the same pinned download automatically before its first load when
-   `PRAXIS_QWEN_TTS_DOWNLOAD=1`; a flock serializes concurrent workers.
+   `PRAXIS_QWEN_TTS_DOWNLOAD=1`; a flock serializes concurrent workers. A first
+   synthesis may therefore take several minutes on a cold model directory; do not
+   interrupt it mid-download — an incomplete directory must be removed or
+   completed before the worker retries.
 
    The Vosk service starts through `run_vosk.py`: with `VOSK_DOWNLOAD_MODELS=1`
    it provisions the **large** publisher models (Apache-2.0, CRC- and
@@ -443,10 +447,14 @@ workflows in `/workspace/workflows`, with GUI examples in
    A loaded ComfyUI node does **not** mean these ~4.5 GB speech weights are installed.
    In warm mode, missing weights surface as `Qwen warm worker failed; owned worker
    stopped, request NOT retried` because worker errors deliberately do not echo
-   private text. Provision the model before retrying; no ComfyUI restart is needed.
-   In the workflow's `reference_audio` field use only the input-relative filename,
-   e.g. `reference.wav`, **not** `/workspace/input/reference.wav`. Uploading a voice
-   does not change an existing workflow's selected filename.
+   private text. The real child failure (e.g. `Install the pinned Qwen3-TTS Base
+   model locally before synthesis`) is now persisted together with the bounded
+   child-stderr tail in `/workspace/logs/qwen-worker.log` — check it first when a
+   warm worker fails. Provision the model before retrying; no ComfyUI restart is
+   needed after the model itself lands. In the workflow's `reference_audio` field
+   use only the input-relative filename, e.g. `reference.wav`, **not**
+   `/workspace/input/reference.wav`. Uploading a voice does not change an existing
+   workflow's selected filename.
 4. Obtain/verify an SDXL checkpoint separately in `/workspace/models/checkpoints`.
 5. Provision Vosk models: the flag-gated `run_vosk.py` startup handles the
    **large** publisher models automatically with `VOSK_DOWNLOAD_MODELS=1`; the

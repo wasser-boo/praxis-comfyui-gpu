@@ -14,6 +14,7 @@ import uuid
 
 import folder_paths
 from .segments import speech_segments
+from .warm_worker import persist_stderr_tail
 
 XTTS_LANGUAGES = ['en', 'es', 'fr', 'de', 'it', 'pt', 'pl', 'tr', 'ru', 'nl', 'cs', 'ar', 'zh-cn', 'hu', 'ko', 'ja', 'hi', 'de-ja']
 QWEN_LANGUAGES = ['auto', 'en', 'zh', 'ja', 'ko', 'de', 'fr', 'ru', 'pt', 'es', 'it', 'de-ja']
@@ -117,7 +118,7 @@ class _SpeechNode:
             else:
                 subprocess.run([python, str(Path(__file__).with_name('worker.py'))],
                                input=json.dumps(request, ensure_ascii=False), text=True, check=True,
-                               timeout=600, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=600, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                                env=environment)
             if not target.is_file() or not 44 < target.stat().st_size <= 32 * 1024 * 1024:
                 raise RuntimeError('Worker did not produce a bounded non-empty WAV')
@@ -126,6 +127,9 @@ class _SpeechNode:
             if header[:4] != b'RIFF' or header[8:] != b'WAVE':
                 raise RuntimeError('Worker produced invalid WAV media')
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as error:
+            # Persist a bounded child-stderr tail for the operator; exception text
+            # still never reaches users or the reply.
+            persist_stderr_tail(getattr(error, 'stderr', b''), f'{self.BACKEND} worker failure')
             cleanup_output(target)
             # Never include subprocess output: third-party errors may echo text.
             raise RuntimeError(f'{self.BACKEND} worker failed ({type(error).__name__}); check its environment, model installation, CUDA and limits') from None

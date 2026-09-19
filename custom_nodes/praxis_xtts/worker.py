@@ -23,9 +23,17 @@ else:
     from segments import speech_segments
 
 QWEN_MODEL_DIR = '/workspace/qwen3-tts/1.7B-Base'
+QWEN_REQUIRED_FILES = ('config.json', 'model.safetensors', 'speech_tokenizer/config.json',
+                       'speech_tokenizer/model.safetensors', 'tokenizer_config.json',
+                       'vocab.json', 'merges.txt')
 QWEN_LANGUAGES = {'auto': 'Auto', 'en': 'English', 'zh': 'Chinese', 'ja': 'Japanese',
                   'ko': 'Korean', 'de': 'German', 'fr': 'French', 'ru': 'Russian',
                   'pt': 'Portuguese', 'es': 'Spanish', 'it': 'Italian'}
+
+
+def qwen_model_complete(directory) -> bool:
+    return (isinstance(directory, Path) and directory.is_absolute()
+            and all((directory / name).is_file() for name in QWEN_REQUIRED_FILES))
 
 
 def xtts(request):
@@ -55,20 +63,26 @@ def ensure_qwen_model(directory: Path) -> None:
 
     The node pins HF_HUB_OFFLINE for inference. The download subprocess strips those
     variables and reuses the same pinned repository/revision as the manual command.
-    A lock serializes concurrent workers; completion is signaled by config.json.
+    A lock serializes concurrent workers; completion is signaled by a complete file
+    set. Incomplete trees (for example an interrupted download) are never silently
+    reused: the operator inspects or removes them before the download retries.
     """
-    if (directory / 'config.json').is_file():
+    if qwen_model_complete(directory):
         return
     if os.environ.get('PRAXIS_QWEN_TTS_DOWNLOAD', '') != '1':
         raise RuntimeError('Qwen3-TTS model missing; set PRAXIS_QWEN_TTS_DOWNLOAD=1 '
                            'or run download_qwen_model.py --download')
+    if directory.exists() and any(directory.iterdir()):
+        missing = [name for name in QWEN_REQUIRED_FILES if not (directory / name).is_file()]
+        raise RuntimeError('Qwen3-TTS model directory is incomplete (interrupted download?); '
+                           'missing ' + ', '.join(missing) + '; remove or complete it before retrying')
     from download_qwen_model import MODEL, REVISION
     print(f'Qwen3-TTS model missing; downloading {MODEL} @ {REVISION}', flush=True)
     lock_path = directory.parent / '.qwen-download.lock'
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open('a+') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if (directory / 'config.json').is_file():
+        if qwen_model_complete(directory):
             return  # provisioned by a concurrent worker while waiting for the lock
         environment = os.environ.copy()
         environment.pop('HF_HUB_OFFLINE', None)
@@ -76,7 +90,7 @@ def ensure_qwen_model(directory: Path) -> None:
         script = Path(__file__).with_name('download_qwen_model.py')
         subprocess.run([sys.executable, str(script), '--download', '--directory', str(directory)],
                        check=True, timeout=3600, env=environment)
-    if not (directory / 'config.json').is_file():
+    if not qwen_model_complete(directory):
         raise RuntimeError('Qwen3-TTS provisioning did not produce the pinned model')
 
 
@@ -88,9 +102,12 @@ class QwenEngine:
         started = time.perf_counter()
         segments = speech_segments(request['text'], request['language'])
         directory = Path(os.environ.get('PRAXIS_QWEN_TTS_MODEL_DIR', QWEN_MODEL_DIR))
-        required = ['config.json', 'model.safetensors', 'speech_tokenizer/config.json',
-                    'speech_tokenizer/model.safetensors', 'tokenizer_config.json', 'vocab.json', 'merges.txt']
-        if not directory.is_absolute() or not all((directory / name).is_file() for name in required):
+        if not qwen_model_complete(directory):
+            # Provision BEFORE completeness checks: a fresh model directory is
+            # absent or empty, and a missing model must not hide the authorized
+            # download path (PRAXIS_QWEN_TTS_DOWNLOAD=1).
+            ensure_qwen_model(directory)
+        if not qwen_model_complete(directory):
             raise RuntimeError('Install the pinned Qwen3-TTS Base model locally before synthesis')
         os.environ.update({'HF_HUB_OFFLINE': '1', 'TRANSFORMERS_OFFLINE': '1', 'HF_HUB_DISABLE_TELEMETRY': '1'})
         cold = self.model is None
@@ -113,7 +130,6 @@ class QwenEngine:
             from qwen_tts import Qwen3TTSModel
             if not torch.cuda.is_available():
                 raise RuntimeError('Qwen3-TTS requires CUDA')
-            ensure_qwen_model(directory)
             attn = os.environ.get('PRAXIS_QWEN_TTS_ATTN', '')
             if not attn:
                 # Measured on RTX 3090: sdpa beats flash_attention_2 for this workload

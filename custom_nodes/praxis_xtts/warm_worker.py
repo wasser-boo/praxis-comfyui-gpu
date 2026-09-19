@@ -5,6 +5,7 @@ fallback. The parent serializes requests and owns idle expiry, avoiding a child
 exiting on an idle deadline while a new request is being submitted.
 """
 import atexit
+import collections
 import logging
 import os
 from pathlib import Path
@@ -15,6 +16,62 @@ import time
 from .protocol import encode, receive
 
 
+STDERR_LOG = '/workspace/logs/qwen-worker.log'
+STDERR_BUDGET = 16 * 1024
+STDERR_PERSIST = 8 * 1024
+STDERR_FILE_CAP = 256 * 1024
+
+
+def _drain_stderr(process, budget=STDERR_BUDGET):
+    """Drain child stderr into a bounded byte buffer; return the buffer list."""
+    buffer = []
+    total = 0
+    def drain():
+        nonlocal total
+        try:
+            while True:
+                chunk = process.stderr.readline()
+                if not chunk:
+                    return
+                buffer.append(chunk)
+                total += len(chunk)
+                while total > budget and buffer:
+                    total -= len(buffer[0])
+                    buffer.pop(0)
+        except Exception:
+            pass
+        finally:
+            try:
+                process.stderr.close()
+            except OSError:
+                pass
+    threading.Thread(target=drain, daemon=True, name='qwen-worker-stderr').start()
+    return buffer
+
+
+def persist_stderr_tail(raw, label):
+    """Append a bounded worker-stderr tail to a size-capped debugging log.
+
+    This is the only persisted child output: exception text still never reaches
+    ComfyUI users, but an operator can read the real failure locally.
+    """
+    if not raw:
+        return
+    try:
+        path = Path(STDERR_LOG)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('ab') as stream:
+            stream.write(f'\n--- {label} ---\n'.encode('utf-8', 'replace'))
+            stream.write(raw[-STDERR_PERSIST:])
+        if path.stat().st_size > STDERR_FILE_CAP:
+            with path.open('rb') as stream:
+                stream.seek(-STDERR_FILE_CAP // 2, 2)
+                keep = stream.read()
+            path.write_bytes(b'[qwen-worker.log truncated]\n' + keep)
+    except OSError:
+        pass
+
+
 class WarmWorker:
     def __init__(self, python, script, environment, idle_seconds, timeout=600):
         if os.name != 'posix':
@@ -22,6 +79,7 @@ class WarmWorker:
         self.python, self.script, self.environment = python, str(script), environment
         self.idle_seconds, self.timeout = idle_seconds, timeout
         self.process = self.socket = self.timer = None
+        self.stderr_tail = None
         self.lock = threading.Lock()
         self.generation = 0
         self.blocked = False
@@ -71,7 +129,8 @@ class WarmWorker:
             self.process = subprocess.Popen(
                 [self.python, self.script, '--server-fd', str(child.fileno())],
                 pass_fds=(child.fileno(),), start_new_session=True, env=self.environment,
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            self.stderr_tail = _drain_stderr(self.process)
             self.socket = parent
         except BaseException:
             parent.close()
@@ -96,6 +155,9 @@ class WarmWorker:
                 if result.get('ok') is not True or not isinstance(result.get('timings'), dict):
                     raise RuntimeError('Invalid worker acknowledgement')
             except Exception:
+                if self.stderr_tail:
+                    time.sleep(0.25)  # let the drainer finish reading the failure
+                    persist_stderr_tail(b''.join(self.stderr_tail), 'Qwen warm worker failure')
                 self._close()
                 raise RuntimeError('Qwen warm worker failed; owned worker stopped, request NOT retried') from None
             except BaseException:
