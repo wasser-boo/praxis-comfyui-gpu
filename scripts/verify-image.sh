@@ -23,7 +23,7 @@ import configparser
 from pathlib import Path
 c=configparser.ConfigParser(interpolation=None)
 c.read('/etc/supervisor/praxis.conf')
-assert {s for s in c if s.startswith('program:')} == {'program:'+p for p in ['netbird','comfyui','vosk']}
+assert {s for s in c if s.startswith('program:')} == {'program:'+p for p in ['netbird','gpu-agent','comfyui','vosk']}
 assert '--base-directory /workspace' in c['program:comfyui']['command']
 for flag in ('--input-directory','--output-directory','--temp-directory','--user-directory'):
     assert flag not in c['program:comfyui']['command']
