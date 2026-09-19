@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 umask 077
-mkdir -p /workspace/{netbird,llama.cpp,tts,qwen3-tts,huggingface,models,input,output,temp,logs,user,custom_nodes}
+mkdir -p /workspace/{netbird,tts,qwen3-tts,huggingface,models,input,output,temp,logs,user,custom_nodes}
 chmod 700 /workspace/netbird
 # A repeated Vast on-start hook must not launch a second stack.
 [[ ! -L /workspace/.praxis-stack.lock ]] || { echo 'Refusing symlink startup lock' >&2; exit 1; }
 exec 9>/workspace/.praxis-stack.lock
-flock -n 9 || { echo 'Praxis llama.cpp GPU stack is already running'; exit 0; }
+flock -n 9 || { echo 'Praxis speech GPU stack is already running'; exit 0; }
 node=/workspace/custom_nodes/praxis_xtts
 stock=/opt/ComfyUI/custom_nodes/praxis_xtts
 if [[ -L "$node" ]]; then

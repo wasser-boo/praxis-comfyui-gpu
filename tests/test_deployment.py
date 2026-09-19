@@ -1,11 +1,13 @@
 import configparser
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
-import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
@@ -14,58 +16,49 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def module(name):
     spec = importlib.util.spec_from_file_location(name, ROOT / 'scripts' / (name + '.py'))
-    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod); return mod
+    loaded = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loaded)
+    return loaded
 
 
 class DeploymentTests(unittest.TestCase):
-    def test_llama_proxy_keeps_private_listeners_and_routes_embeddings(self):
-        config = (ROOT / 'scripts/llama-proxy.conf').read_text()
-        for text in ['listen 127.0.0.1:11434;', 'proxy_pass http://127.0.0.1:11435;',
-                     'proxy_pass http://127.0.0.1:11436;', 'location = /v1/embeddings',
-                     'proxy_buffering off;', 'proxy_next_upstream off;',
-                     'if ($http_origin != "") { return 403; }', 'location / { return 404; }']:
-            self.assertIn(text, config)
-        self.assertNotIn('0.0.0.0', config)
+    def test_no_llama_stack_anywhere(self):
+        for path in ['LLAMA_CPP.json', 'scripts/run_llama.py', 'scripts/llama_config.py',
+                     'scripts/provision_llama.py', 'scripts/profile_llama.py',
+                     'scripts/llama-models.json', 'scripts/llama-proxy.conf',
+                     'scripts/cpu_threads.py', 'scripts/acceptance_llama.py',
+                     'tests/test_llama.py', 'tests/test_llama_acceptance.py', 'tests/test_cpu_threads.py']:
+            self.assertFalse((ROOT / path).exists(), path)
         docker = (ROOT / 'Dockerfile').read_text()
-        self.assertNotIn('OLLAMA_', docker)
+        for text in ['llama-build', 'llama-server', 'thecodacus', 'GenerelSchwerz', 'OLLAMA_', 'llama-proxy']:
+            self.assertNotIn(text, docker)
         self.assertFalse(any(l.strip().startswith('EXPOSE ') for l in docker.splitlines()))
 
-    def test_supervisor_keeps_services_independent_without_download_retry_loops(self):
+    def test_supervisor_runs_only_netbird_comfyui_and_vosk(self):
         c = configparser.ConfigParser(interpolation=None); c.read(ROOT / 'supervisord.conf')
         self.assertEqual(c['unix_http_server']['chmod'], '0700')
-        for kind in ['chat', 'embedding']:
-            setup = c['program:llama-' + kind]
-            self.assertEqual(setup['autorestart'], 'false')
-            self.assertEqual(setup['startsecs'], '0')
-            self.assertEqual(setup['startretries'], '0')
-            self.assertIn('run_llama.py ' + kind, setup['command'])
-        self.assertIn('--base-directory /workspace', c['program:comfyui']['command'])
-        # The pinned ComfyUI revision derives input/output/temp/user from --base-
-        # directory and appends a trailing "temp" to --temp-directory; redundant
-        # explicit flags would create /workspace/temp/temp.
-        for flag in ('--input-directory', '--output-directory', '--temp-directory', '--user-directory'):
-            self.assertNotIn(flag, c['program:comfyui']['command'])
-        names = ['netbird', 'llama-chat', 'llama-embedding', 'llama-proxy', 'comfyui', 'vosk']
+        names = ['netbird', 'comfyui', 'vosk']
         self.assertEqual({s for s in c if s.startswith('program:')}, {'program:' + n for n in names})
         for name in names:
             self.assertEqual(c['program:' + name]['stopasgroup'], 'true')
+        self.assertIn('--base-directory /workspace', c['program:comfyui']['command'])
+        for flag in ('--input-directory', '--output-directory', '--temp-directory', '--user-directory'):
+            self.assertNotIn(flag, c['program:comfyui']['command'])
+        self.assertIn('run_vosk.py', c['program:vosk']['command'])
+        self.assertNotIn('vosk_server.py', c['program:vosk']['command'])
 
-    def test_build_pins_codacus_perf_and_matching_libraries(self):
-        source = json.loads((ROOT / 'LLAMA_CPP.json').read_text())
+    def test_build_pins_comfyui_and_speech_dependencies_only(self):
         docker = (ROOT / 'Dockerfile').read_text()
-        self.assertEqual(source['repository'], 'https://github.com/thecodacus/llama.cpp')
-        self.assertEqual(source['branch'], 'perf')
-        self.assertIn(source['commit'], docker)
-        self.assertEqual(source['commit'], module('llama_config').REVISION)
-        for text in ['-DGGML_CUDA=ON', '-DGGML_NATIVE=OFF', 'llama-server llama-moe-trace',
-                     'COPY --from=llama-build /opt/llama.cpp /opt/llama.cpp']:
+        self.assertIn('COMFY_REV=a2afcdb89910f7ada92e2a6e04c8b5c9126122f1', docker)
+        for text in ['/opt/qwen-tts-venv', 'sox', 'aiohttp==3.13.3', 'coqui-tts', 'ffmpeg']:
             self.assertIn(text, docker)
-        for old in ['scripts/provision_ollama.py', 'scripts/ensure_ollama_cuda.py', 'scripts/ollama-proxy.conf']:
-            self.assertFalse((ROOT / old).exists())
+        self.assertNotIn('download_qwen_model.py --download', docker)
+        self.assertNotIn('COQUI_TOS_AGREED=1', docker)
+        self.assertNotIn('nvidia/cuda:12.8.1-devel', docker)  # no llama.cpp build stage
 
     def test_workflows_are_generic_api_and_gui_and_install_without_overwrite(self):
         installer = module('install_workflows')
-        for engine,kind in [('xtts', 'PraxisXTTS'), ('qwen3', 'PraxisQwen3TTS')]:
+        for engine, kind in [('xtts', 'PraxisXTTS'), ('qwen3', 'PraxisQwen3TTS')]:
             api = json.loads((ROOT / f'workflows/tts-{engine}-de-ja-api.json').read_text())
             self.assertEqual(api['1']['class_type'], kind)
             self.assertEqual(api['1']['inputs']['reference_audio'], 'reference.wav')
@@ -89,7 +82,6 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(gui['nodes'][0]['widgets_values'][1:3], ['auto', 'reference.wav'])
 
     def test_vendored_runtime_matches_reviewed_upstream_hashes(self):
-        import hashlib
         base = ROOT / 'custom_nodes/praxis_xtts'
         provenance = json.loads((base / 'UPSTREAM.json').read_text())
         # worker.py is intentionally divergent from the reviewed upstream commit:
@@ -102,70 +94,25 @@ class DeploymentTests(unittest.TestCase):
                 continue
             self.assertEqual(hashlib.sha256((base / name).read_bytes()).hexdigest(), expected, name)
 
-    def test_runtime_example_selects_independent_context_sizes(self):
+    def test_runtime_example_is_speech_only(self):
         env = dict(line.split('=', 1) for line in (ROOT / 'runtime.env.example').read_text().splitlines() if '=' in line and not line.startswith('#'))
-        config = module('llama_config')
-        self.assertEqual(env['LLAMA_THREADS'], 'auto')
-        with patch.object(config, 'physical_thread_count', return_value=6) as detect:
-            plan = config.settings(env)
-            detect.assert_called_once_with()
-        self.assertTrue(plan['download'])
-        self.assertTrue(plan['generate_profile'])
-        self.assertEqual((plan['slots'], plan['threads'], plan['context']), (56, 6, 4096))
-        self.assertEqual(env['GGML_SCHED_PREFETCH_EXPERTS'], '0')
-        self.assertNotIn('GGML_SCHED_PREFETCH_EXPERTS', config.child_environment(env))
-        self.assertIn('draft-mtp', config.server_command('chat', env))
-        embedding = config.server_command('embedding', env)
-        self.assertEqual(embedding[embedding.index('--ctx-size') + 1], '2048')
+        self.assertEqual(env['VOSK_DEFAULT_LANGUAGE'], 'de')
+        self.assertEqual(env['VOSK_DOWNLOAD_MODELS'], '1')
+        self.assertEqual(env['PRAXIS_QWEN_TTS_DOWNLOAD'], '1')
+        self.assertEqual(env['PRAXIS_QWEN_TTS_MODEL_DIR'], '/workspace/qwen3-tts/1.7B-Base')
+        for key in env:
+            self.assertNotIn('LLAMA', key)
+            self.assertNotIn('OLLAMA', key)
         self.assertNotIn('COQUI_TOS_AGREED', env)
 
-    def test_new_tts_dependencies_are_isolated_and_no_models_are_baked_in(self):
+    def test_no_models_are_baked_in_and_speech_stays_flag_gated(self):
         docker = (ROOT / 'Dockerfile').read_text()
-        for text in ['/opt/qwen-tts-venv', 'sox', 'nginx', 'aiohttp==3.13.3', 'llama-moe-trace']:
-            self.assertIn(text, docker)
-        self.assertNotIn('download_qwen_model.py --download', docker)
-        self.assertNotIn('COQUI_TOS_AGREED=1', docker)
         for ignore in ['.gitignore', '.dockerignore']:
             text = (ROOT / ignore).read_text()
             for pattern in ['*.wav', '*.safetensors', '__pycache__']:
                 self.assertIn(pattern, text)
-
-    def test_existing_speech_vosk_and_workflows_are_byte_identical_to_base(self):
-        import hashlib
-        base = json.loads((ROOT / 'BASE_STACK.json').read_text())
-        # praxis_xtts worker.py, node.py and warm_worker.py are intentionally
-        # divergent from the base stack: measured attention default, flag-gated
-        # provisioning, torch.compile and child-stderr diagnostics are pinned by
-        # the dedicated tests below instead of byte identity against base hashes.
-        for path, expected in base['sha256'].items():
-            if path in ('custom_nodes/praxis_xtts/worker.py', 'custom_nodes/praxis_xtts/node.py',
-                        'custom_nodes/praxis_xtts/warm_worker.py'):
-                continue
-            if path.startswith(('custom_nodes/', 'workflows/', 'docs/')) or path in [
-                'constraints.txt', 'scripts/vosk_server.py', 'scripts/provision_vosk.py',
-                'scripts/xtts_worker.py', 'scripts/install_workflows.py', 'scripts/smoke.py']:
-                self.assertEqual(hashlib.sha256((ROOT / path).read_bytes()).hexdigest(), expected, path)
-
-    def test_qwen_worker_speed_and_provisioning_policies(self):
-        source = (ROOT / 'custom_nodes' / 'praxis_xtts' / 'worker.py').read_text()
-        # Measured-fastest attention default; flash_attention_2 only as validated opt-in.
-        self.assertIn("attn = 'sdpa'", source)
-        self.assertIn("PRAXIS_QWEN_TTS_ATTN must be sdpa or flash_attention_2", source)
-        self.assertIn("find_spec('flash_attn')", source)
-        # torch.compile halves per-token decode; opt-out stays available.
-        self.assertIn("os.environ.get('PRAXIS_QWEN_TTS_COMPILE', '1') != '0'", source)
-        self.assertIn('torch.compile(talker.model, dynamic=True)', source)
-        self.assertIn('torch.compile(talker.code_predictor.model, dynamic=True)', source)
-        # Flag-gated provisioning mirrors LLAMA_DOWNLOAD_MODELS: opt-in, offline-safe.
-        self.assertIn("os.environ.get('PRAXIS_QWEN_TTS_DOWNLOAD', '') != '1'", source)
-        self.assertIn("environment.pop('HF_HUB_OFFLINE', None)", source)
-        self.assertIn('fcntl.flock', source)
-        # Provisioning must run BEFORE the completeness error: a fresh box has an
-        # empty model directory, so the authorized download path stays reachable.
-        seek = source.index('if not qwen_model_complete(directory):')
-        after = source[seek:]
-        self.assertLess(after.index('ensure_qwen_model(directory)'),
-                        after.index('Install the pinned Qwen3-TTS Base model locally before synthesis'))
+        self.assertNotIn('download_qwen_model.py --download', docker)
+        self.assertNotIn('provision_vosk.py', docker)
 
     def test_worker_failure_diagnostics_are_pinned(self):
         root = ROOT / 'custom_nodes' / 'praxis_xtts'
@@ -187,6 +134,18 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('request NOT retried', warm)
         self.assertIn('from None', node)
 
+    def test_qwen_worker_speed_and_provisioning_policies(self):
+        source = (ROOT / 'custom_nodes' / 'praxis_xtts' / 'worker.py').read_text()
+        self.assertIn("attn = 'sdpa'", source)
+        self.assertIn("PRAXIS_QWEN_TTS_ATTN must be sdpa or flash_attention_2", source)
+        self.assertIn("find_spec('flash_attn')", source)
+        self.assertIn("os.environ.get('PRAXIS_QWEN_TTS_COMPILE', '1') != '0'", source)
+        self.assertIn('torch.compile(talker.model, dynamic=True)', source)
+        self.assertIn('torch.compile(talker.code_predictor.model, dynamic=True)', source)
+        self.assertIn("os.environ.get('PRAXIS_QWEN_TTS_DOWNLOAD', '') != '1'", source)
+        self.assertIn("environment.pop('HF_HUB_OFFLINE', None)", source)
+        self.assertIn('fcntl.flock', source)
+
     def test_vosk_startup_provisions_large_models_only_when_authorized(self):
         source = (ROOT / 'scripts' / 'run_vosk.py').read_text()
         self.assertIn("os.environ.get('VOSK_DOWNLOAD_MODELS', '') == '1'", source)
@@ -195,12 +154,21 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('am/final.mdl', source)
         self.assertIn('os.execv', source)
 
-    def test_supervisor_runs_vosk_through_the_provisioning_wrapper(self):
-        import configparser
-        c = configparser.ConfigParser(interpolation=None)
-        c.read(ROOT / 'supervisord.conf')
-        self.assertIn('run_vosk.py', c['program:vosk']['command'])
-        self.assertNotIn('vosk_server.py', c['program:vosk']['command'])
+    def test_speech_and_vosk_files_are_byte_identical_to_base(self):
+        base = json.loads((ROOT / 'BASE_STACK.json').read_text())
+        # praxis_xtts worker.py, node.py and warm_worker.py are intentionally
+        # divergent from the base stack: measured attention default, flag-gated
+        # provisioning, torch.compile and child-stderr diagnostics are pinned by
+        # the dedicated tests below instead of byte identity against base hashes.
+        for path, expected in base['sha256'].items():
+            self.assertTrue((ROOT / path).is_file(), path)
+            if path in ('custom_nodes/praxis_xtts/worker.py', 'custom_nodes/praxis_xtts/node.py',
+                        'custom_nodes/praxis_xtts/warm_worker.py'):
+                continue
+            if path.startswith(('custom_nodes/', 'workflows/', 'docs/')) or path in [
+                'constraints.txt', 'scripts/vosk_server.py', 'scripts/provision_vosk.py',
+                'scripts/xtts_worker.py', 'scripts/install_workflows.py', 'scripts/smoke.py']:
+                self.assertEqual(hashlib.sha256((ROOT / path).read_bytes()).hexdigest(), expected, path)
 
     def test_dockerfile_pins_flashattention_wheel_and_image_checks_it(self):
         docker = (ROOT / 'Dockerfile').read_text()
@@ -211,4 +179,5 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('py_compile /opt/praxis/bin/run_vosk.py', verify)
 
 
-if __name__ == '__main__': unittest.main()
+if __name__ == '__main__':
+    unittest.main()
