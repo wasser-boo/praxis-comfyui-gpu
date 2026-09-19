@@ -7,7 +7,7 @@
     ".dockerignore": "969dfd0912cc0c0c953498b26afe5f613151b7e193dec85f7f03068828a103e5",
     ".gitignore": "a3c0c767d112efa9756e303df118fd0bd757f90da20e6f6db49761799825deba",
     "DEPLOY.md": "a382f7155bbe80869eb96d20d64fa211e9620e7567bf141b8d0d9b05b0df1a32",
-    "Dockerfile": "b7e44292bce489b32bda81cf79f575d835d7f30e59d3f7c96bcbb03d0010de59",
+    "Dockerfile": "00c03984ee9f95b66944abccbe61b2f887871d380a4e32c65994a093878941d0",
     "constraints.txt": "ea2c767c760c116389ddfb1796976096e978488b2e9272dbb0373141d62d7999",
     "custom_nodes/praxis_xtts/README.md": "691602b1e36d0780cb32255422c5c3c4b2359dd6193ed53a88008dd9bd499185",
     "custom_nodes/praxis_xtts/UPSTREAM.json": "0ad98b1cd5d219179547956e9d03dcc4ee5c5e482d0bb1ed21832e4119b72805",

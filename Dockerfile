@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1
 FROM netbirdio/netbird:0.78.2-rootless@sha256:4a30e98bb0a98848c3b2a3ca4778cebfbe87d210f05b1f40288bb072d627c3fd AS netbird
+# pgpu: Router-Image liefert das statische gpu-agent-Artefakt (/gpu-agent).
+ARG PGPU_IMAGE=vayayo/praxis-gpu-router:0.2
+FROM ${PGPU_IMAGE} AS pgpu-agent-image
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04@sha256:17e2934e1fa96152b14f78078bfbafd0f00f391df995dc6c641a720fce1202bb
 
 ARG COMFY_REV=a2afcdb89910f7ada92e2a6e04c8b5c9126122f1
@@ -51,10 +54,9 @@ RUN curl -fsSL --output "/tmp/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp
     && rm "/tmp/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl" \
     && /opt/qwen-tts-venv/bin/python -c 'import flash_attn; assert flash_attn.__version__ == "2.8.3"'
 COPY scripts /opt/praxis/bin
-# pgpu: Router-Call-home-Agent (statisches musl-Binary aus dem Router-Image)
-# + Call-home-Env. Am Stage-Ende, damit die venv-Layers gecacht bleiben.
-ARG PGPU_IMAGE=vayayo/praxis-gpu-router:0.2
-COPY --from=${PGPU_IMAGE} /gpu-agent /opt/praxis/bin/gpu-agent
+# pgpu: Router-Call-home-Agent (statisches musl-Binary aus dem Router-Image).
+# --from kann keine Variablen → Alias-Stage oben (ARG global).
+COPY --from=pgpu-agent-image /gpu-agent /opt/praxis/bin/gpu-agent
 ENV NB_SOCKS5_LISTENER_PORT=1080 PRAXIS_ROLE=media \
     ROUTER_URL= PRAXIS_NODE_TOKEN= \
     PRAXIS_AGENT_HEALTH_URLS=http://127.0.0.1:8188/object_info/PraxisQwen3TTS,http://127.0.0.1:2700/health \
