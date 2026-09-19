@@ -10,13 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
     NB_NETSTACK_SKIP_PROXY=true NB_DISABLE_DNS=true NB_ENABLE_CAPTURE=false \
     NB_CONFIG=/workspace/netbird/config.json NB_STATE_DIR=/workspace/netbird \
     NB_DAEMON_ADDR=unix:///workspace/netbird/netbird.sock NB_LOG_FILE=console \
-    NB_ENTRYPOINT_SERVICE_TIMEOUT=60 \
-    NB_SOCKS5_LISTENER_PORT=1080 \
-    PRAXIS_ROLE=media \
-    ROUTER_URL= PRAXIS_NODE_TOKEN= \
-    PRAXIS_AGENT_HEALTH_URLS=http://127.0.0.1:8188/object_info/PraxisQwen3TTS,http://127.0.0.1:2700/health \
-    PRAXIS_AGENT_MODEL_DIR=/workspace/vosk \
-    PRAXIS_AGENT_ACCEPTANCE_CMD=/usr/bin/python3 /opt/praxis/bin/smoke.py
+    NB_ENTRYPOINT_SERVICE_TIMEOUT=60
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-venv python3-dev build-essential git ca-certificates \
     ffmpeg libsndfile1 espeak-ng sox libsox-fmt-all supervisor tini curl util-linux libssl3 \
@@ -65,7 +59,7 @@ ENV NB_SOCKS5_LISTENER_PORT=1080 PRAXIS_ROLE=media \
     ROUTER_URL= PRAXIS_NODE_TOKEN= \
     PRAXIS_AGENT_HEALTH_URLS=http://127.0.0.1:8188/object_info/PraxisQwen3TTS,http://127.0.0.1:2700/health \
     PRAXIS_AGENT_MODEL_DIR=/workspace/vosk \
-    PRAXIS_AGENT_ACCEPTANCE_CMD=/usr/bin/python3 /opt/praxis/bin/smoke.py
+    PRAXIS_AGENT_ACCEPTANCE_CMD="/usr/bin/python3 /opt/praxis/bin/smoke.py"
 COPY supervisord.conf /etc/supervisor/praxis.conf
 COPY workflows /opt/praxis/workflows
 RUN chmod +x /opt/praxis/bin/*.sh \
