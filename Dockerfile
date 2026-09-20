@@ -58,9 +58,14 @@ COPY scripts /opt/praxis/bin
 # pgpu: Router-Call-home-Agent (statisches musl-Binary aus dem Router-Image).
 # --from kann keine Variablen → Alias-Stage oben (ARG global).
 COPY --from=pgpu-agent-image /gpu-agent /opt/praxis/bin/gpu-agent
+# pgpu-Patch: netbird up --hostname $NB_HOSTNAME (sonst enrollt Vast unter
+# Container-ID; Router-Connector findet gpu-<role>-<tok8> nicht).
+COPY netbird-entrypoint-praxis.sh /usr/local/bin/netbird-entrypoint.sh
+RUN chmod +x /usr/local/bin/netbird-entrypoint.sh /opt/praxis/bin/gpu-agent
 ENV NB_SOCKS5_LISTENER_PORT=1080 PRAXIS_ROLE=media \
     ROUTER_URL= PRAXIS_NODE_TOKEN= \
     PRAXIS_AGENT_HEALTH_URLS=http://127.0.0.1:8188/object_info/PraxisQwen3TTS,http://127.0.0.1:2700/health \
+    PRAXIS_AGENT_SUPERVISOR_CONF=/etc/supervisor/praxis.conf \
     PRAXIS_AGENT_MODEL_DIR=/workspace/vosk \
     PRAXIS_AGENT_ACCEPTANCE_CMD="/usr/bin/python3 /opt/praxis/bin/smoke.py"
 COPY supervisord.conf /etc/supervisor/praxis.conf
