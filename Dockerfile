@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # pgpu: Router-Image (gpu-agent-Artefakt) — globaler ARG vor dem ersten FROM.
-ARG PGPU_IMAGE=vayayo/praxis-gpu-router:0.2
+ARG PGPU_IMAGE=vayayo/praxis-gpu-router:0.26.3@sha256:87d379069a3e75da6125144a52f56689ed0d87048d50ef27c6544a7171f1140b
 FROM netbirdio/netbird:0.78.2-rootless@sha256:4a30e98bb0a98848c3b2a3ca4778cebfbe87d210f05b1f40288bb072d627c3fd AS netbird
 # pgpu: Router-Image liefert das statische gpu-agent-Artefakt (/gpu-agent).
 FROM ${PGPU_IMAGE} AS pgpu-agent-image
