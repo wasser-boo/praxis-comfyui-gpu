@@ -186,7 +186,9 @@ class BundleTests(unittest.TestCase):
         # default, flag-gated provisioning, torch.compile, child-stderr diagnostics);
         # their behavior is pinned by dedicated tests instead of byte identity.
         for name, digest in manifest['runtime_files'].items():
-            if name in ('worker.py', 'node.py', 'warm_worker.py'):
+            # Atomic/resumable provisioning is another deliberate local change;
+            # test_qwen_provision pins its bytes and exercises failure recovery.
+            if name in ('worker.py', 'node.py', 'warm_worker.py', 'download_qwen_model.py'):
                 continue
             self.assertEqual(hashlib.sha256((ROOT / name).read_bytes()).hexdigest(), digest, name)
 

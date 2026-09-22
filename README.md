@@ -36,6 +36,20 @@ in the workflows: `reference.wav`). First TTS run downloads the pinned
 Qwen3-TTS Base model (~4.3 GB, Apache-2.0, revision `fd4b254`); worker
 failures log the real child stderr to `/workspace/logs/qwen-worker.log`.
 
+New local changes (not yet published): Qwen provisioning uses a locked,
+revision-specific `.tmp-<revision>` staging directory beside the model. An
+interrupted transfer can resume there; only a complete pinned file set is
+published atomically. Existing incomplete public model directories still require
+inspection; no blanket deletion of user data or other revisions is performed.
+`UPSTREAM.json`/`BASE_STACK.json` retain historical upstream hashes; the deliberate
+local downloader change is pinned and tested in `tests/test_qwen_provision.py`.
+
+Torch's persistent cache defaults to `/workspace/inductor-cache` with
+`TORCHINDUCTOR_FX_GRAPH_CACHE=1`. Reuse depends on compatible GPU/runtime/settings;
+this is not a promise of zero compilation time. Keep the warm-worker idle timeout
+aligned with router policy. **Zero currently selects one-shot mode, not permanent
+warm mode.** Vosk removal/migration and other router-plan items remain unfinished.
+
 Workflows land in `/workspace/workflows` (API) and
 `/workspace/user/default/workflows` (GUI) at startup, without overwriting
 existing files. Read **[DEPLOY.md](DEPLOY.md)** for Praxis client settings and

@@ -90,7 +90,9 @@ class DeploymentTests(unittest.TestCase):
         # are likewise divergent for the child-stderr diagnostics pinned by
         # test_worker_failure_diagnostics_are_pinned.
         for name, expected in provenance['runtime_files'].items():
-            if name in ('worker.py', 'node.py', 'warm_worker.py'):
+            # Downloader now uses locked, resumable staging + atomic publish;
+            # original provenance hashes stay intact. See test_qwen_provision.py.
+            if name in ('worker.py', 'node.py', 'warm_worker.py', 'download_qwen_model.py'):
                 continue
             self.assertEqual(hashlib.sha256((base / name).read_bytes()).hexdigest(), expected, name)
 
@@ -163,7 +165,7 @@ class DeploymentTests(unittest.TestCase):
         for path, expected in base['sha256'].items():
             self.assertTrue((ROOT / path).is_file(), path)
             if path in ('custom_nodes/praxis_xtts/worker.py', 'custom_nodes/praxis_xtts/node.py',
-                        'custom_nodes/praxis_xtts/warm_worker.py'):
+                        'custom_nodes/praxis_xtts/warm_worker.py', 'custom_nodes/praxis_xtts/download_qwen_model.py'):
                 continue
             if path.startswith(('custom_nodes/', 'workflows/', 'docs/')) or path in [
                 'constraints.txt', 'scripts/vosk_server.py', 'scripts/provision_vosk.py',

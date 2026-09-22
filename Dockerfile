@@ -62,7 +62,9 @@ COPY --from=pgpu-agent-image /gpu-agent /opt/praxis/bin/gpu-agent
 # Container-ID; Router-Connector findet gpu-<role>-<tok8> nicht).
 COPY netbird-entrypoint-praxis.sh /usr/local/bin/netbird-entrypoint.sh
 RUN chmod +x /usr/local/bin/netbird-entrypoint.sh /opt/praxis/bin/gpu-agent
-ENV NB_SOCKS5_LISTENER_PORT=1080 PRAXIS_ROLE=media \
+# Runtime compile-cache settings follow heavyweight dependency layers for cache reuse.
+ENV TORCHINDUCTOR_CACHE_DIR=/workspace/inductor-cache TORCHINDUCTOR_FX_GRAPH_CACHE=1 \
+    NB_SOCKS5_LISTENER_PORT=1080 PRAXIS_ROLE=media \
     ROUTER_URL= PRAXIS_NODE_TOKEN= \
     PRAXIS_AGENT_HEALTH_URLS=http://127.0.0.1:8188/object_info/PraxisQwen3TTS,http://127.0.0.1:2700/health \
     PRAXIS_AGENT_SUPERVISOR_CONF=/etc/supervisor/praxis.conf \
